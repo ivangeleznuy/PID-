@@ -1,0 +1,77 @@
+#include <OneWire.h>
+
+const int heater_pin = 5; 
+const int fan_pin = 6; 
+const int thermal_pin = 7; 
+
+OneWire ds(thermal_pin);
+
+
+byte sensorAddr[8] = {0x28, 0xFF, 0x64, 0x01, 0xB1, 0x46, 0x21, 0x92}; 
+
+float Kp = 20.0;  
+float Ki = 1.0;   
+float Kd = 2.0;   
+
+float targetTemp = 30.0; 
+float integral = 0;
+float lastError = 0;
+unsigned long lastTime;
+
+void setup(void) {
+  Serial.begin(115200);
+  pinMode(heater_pin, OUTPUT);
+  pinMode(fan_pin, OUTPUT);
+  lastTime = millis();
+}
+
+void loop() {
+  if (Serial.available() > 0) {
+    float val = Serial.parseFloat();
+    if (val > 0) targetTemp = val;
+  }
+
+  // Читаем только конкретный датчик по адресу
+  float currentTemp = readSpecificDS(sensorAddr);
+  
+  if (currentTemp == -1000) return; // Пропуск, если датчик не ответил
+
+  unsigned long currentTime = millis();
+  float dt = (currentTime - lastTime) / 1000.0;
+  if (dt <= 0) dt = 0.1;
+
+  float error = targetTemp - currentTemp;
+  float P = Kp * error;
+  integral = constrain(integral + error * dt, -100, 100);
+  float I = Ki * integral;
+  float D = Kd * (error - lastError) / dt;
+
+  int heaterPower = constrain((int)(P + I + D), 0, 255);
+  analogWrite(heater_pin, heaterPower);
+  
+  if (currentTemp > targetTemp + 1.0) analogWrite(fan_pin, 255);
+  else analogWrite(fan_pin, 0);
+
+  Serial.print("Target:"); Serial.print(targetTemp);
+  Serial.print(",Current:"); Serial.print(currentTemp);
+  Serial.print(",Heater:"); Serial.println(heaterPower);
+
+  lastError = error;
+  lastTime = currentTime;
+}
+
+float readSpecificDS(byte addr[8]) {
+  byte data[9];
+  ds.reset();
+  ds.select(addr); // Выбираем конкретный датчик
+  ds.write(0x44, 1);
+  delay(800); 
+  
+  ds.reset();
+  ds.select(addr);
+  ds.write(0xBE);
+  for (byte i = 0; i < 9; i++) data[i] = ds.read();
+  
+  int16_t raw = (data[1] << 8) | data[0];
+  return (float)raw / 16.0;
+}
